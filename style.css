@@ -1,0 +1,414 @@
+/* ===== けいさん王国 app.js ===== */
+'use strict';
+
+/* ---------- 定数 ---------- */
+const STAGES = [
+  {
+    id: 'forest', name: '🌳 もりのくに', bg: 'assets/bg/forest.svg',
+    boss: false, range: [1, 5], enemies: [
+      { name: 'スライム',   img: 'assets/characters/slime.svg',    hp: 3, xp: 20, coin: 10 },
+      { name: 'ひよこ',     img: 'assets/characters/chick.svg',    hp: 3, xp: 25, coin: 12 },
+    ]
+  },
+  {
+    id: 'lake', name: '🌊 みずうみ', bg: 'assets/bg/lake.svg',
+    boss: false, range: [1, 8], enemies: [
+      { name: 'ペンギン',   img: 'assets/characters/penguin.svg',  hp: 4, xp: 30, coin: 15 },
+      { name: 'スライム',   img: 'assets/characters/slime.svg',    hp: 4, xp: 28, coin: 14 },
+    ]
+  },
+  {
+    id: 'mountain', name: '⛰️ やま', bg: 'assets/bg/mountain.svg',
+    boss: false, range: [2, 10], enemies: [
+      { name: 'こうもり',   img: 'assets/characters/bat.svg',      hp: 5, xp: 35, coin: 18 },
+      { name: 'キノコ',     img: 'assets/characters/mushroom.svg', hp: 5, xp: 35, coin: 18 },
+    ]
+  },
+  {
+    id: 'volcano', name: '🌋 かざん', bg: 'assets/bg/volcano.svg',
+    boss: false, range: [3, 12], enemies: [
+      { name: 'ファイア',   img: 'assets/characters/fire.svg',     hp: 6, xp: 45, coin: 22 },
+      { name: 'ゴーレム',   img: 'assets/characters/golem.svg',    hp: 7, xp: 50, coin: 25 },
+    ]
+  },
+  {
+    id: 'castle', name: '👑 おうじょのしろ', bg: 'assets/bg/castle.svg',
+    boss: true, range: [3, 15], enemies: [
+      { name: 'まおう',     img: 'assets/characters/boss.svg',     hp: 10, xp: 100, coin: 50 },
+    ]
+  },
+];
+
+const GACHA_POOL = [
+  { name: 'スライム',   img: 'assets/characters/slime.svg',    rarity: 'C' },
+  { name: 'ひよこ',     img: 'assets/characters/chick.svg',    rarity: 'C' },
+  { name: 'ペンギン',   img: 'assets/characters/penguin.svg',  rarity: 'B' },
+  { name: 'こうもり',   img: 'assets/characters/bat.svg',      rarity: 'B' },
+  { name: 'キノコ',     img: 'assets/characters/mushroom.svg', rarity: 'B' },
+  { name: 'ゴーレム',   img: 'assets/characters/golem.svg',    rarity: 'A' },
+  { name: 'ファイア',   img: 'assets/characters/fire.svg',     rarity: 'A' },
+  { name: 'まおう',     img: 'assets/characters/boss.svg',     rarity: 'S' },
+];
+
+const GACHA_COST = 100;
+const MAX_HP = 3;
+const EXP_PER_LV = 100;
+
+/* ---------- セーブデータ ---------- */
+function defaultSave() {
+  return {
+    coins: 0, gems: 0, lv: 1, exp: 0,
+    unlockedStages: ['forest'],
+    collection: [],
+    stats: { total: 0, correct: 0, weakOps: {} },
+  };
+}
+function loadSave() {
+  try { return JSON.parse(localStorage.getItem('keisan_save')) || defaultSave(); }
+  catch { return defaultSave(); }
+}
+function writeSave() { localStorage.setItem('keisan_save', JSON.stringify(save)); }
+
+let save = loadSave();
+
+/* ---------- ゲーム状態 ---------- */
+let currentStageIdx = 0;
+let currentEnemyIdx = 0;
+let currentEnemy = null;
+let enemyHpNow = 0;
+let playerHp = MAX_HP;
+let battleActive = false;
+let pendingReward = { coin: 0, xp: 0 };
+let correctAns = 0;
+
+/* ---------- DOM helpers ---------- */
+const $ = id => document.getElementById(id);
+function showScreen(id) {
+  document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
+  const el = $(id);
+  if (el) el.classList.add('active');
+}
+
+/* ---------- トップバー ---------- */
+function updateTopBar() {
+  $('coinTop').textContent = save.coins;
+  $('gemTop').textContent = save.gems;
+}
+
+/* ---------- ナビゲーション ---------- */
+document.addEventListener('click', e => {
+  const btn = e.target.closest('[data-go]');
+  if (!btn) return;
+  const dest = btn.dataset.go;
+  if (dest === 'map')    { buildMap(); showScreen('map'); }
+  else if (dest === 'gacha')  { showScreen('gacha'); }
+  else if (dest === 'book')   { buildBook(); showScreen('book'); }
+  else if (dest === 'parent') { buildParent(); showScreen('parent'); }
+  else if (dest === 'title')  { showScreen('title'); }
+});
+
+/* ========== MAP ========== */
+function buildMap() {
+  const board = $('mapBoard');
+  board.innerHTML = '';
+  const positions = [
+    { left: '10%',  top: '62%' },
+    { left: '42%',  top: '44%' },
+    { left: '68%',  top: '58%' },
+    { left: '30%',  top: '22%' },
+    { left: '60%',  top: '10%' },
+  ];
+  STAGES.forEach((st, i) => {
+    const locked = !save.unlockedStages.includes(st.id);
+    const node = document.createElement('div');
+    node.className = 'stage-node' + (locked ? ' locked' : '');
+    node.style.left = positions[i].left;
+    node.style.top  = positions[i].top;
+    node.innerHTML = `<img src="${st.bg}" alt="${st.name}"><div>${st.name}</div>${locked ? '<div style="font-size:22px">🔒</div>' : ''}`;
+    if (!locked) node.addEventListener('click', () => startBattle(i));
+    board.appendChild(node);
+  });
+}
+
+/* ========== BATTLE ========== */
+function startBattle(stageIdx) {
+  currentStageIdx = stageIdx;
+  currentEnemyIdx = 0;
+  playerHp = MAX_HP;
+  battleActive = true;
+  const stage = STAGES[stageIdx];
+  $('stageName').textContent = stage.name;
+  const field = $('battleField');
+  field.className = 'battle-field' + (stage.boss ? ' boss' : '');
+  showScreen('battle');
+  spawnEnemy();
+  renderHearts();
+}
+
+function spawnEnemy() {
+  const stage = STAGES[currentStageIdx];
+  currentEnemy = stage.enemies[currentEnemyIdx % stage.enemies.length];
+  enemyHpNow = currentEnemy.hp;
+  $('enemyName').textContent = currentEnemy.name;
+  $('enemyImg').src = currentEnemy.img;
+  updateEnemyHp();
+  nextQuestion();
+}
+
+function updateEnemyHp() {
+  const pct = Math.max(0, enemyHpNow / currentEnemy.hp * 100);
+  $('enemyHpBar').style.width = pct + '%';
+  const color = pct > 60 ? '#2bd66c' : pct > 30 ? '#f5c542' : '#e23b3b';
+  $('enemyHpBar').style.background = `linear-gradient(90deg,${color},#fff25d)`;
+}
+
+function renderHearts() {
+  $('heartRow').textContent = '❤️'.repeat(playerHp) + '🖤'.repeat(MAX_HP - playerHp);
+}
+
+function nextQuestion() {
+  if (!battleActive) return;
+  const [min, max] = STAGES[currentStageIdx].range;
+  const useAdd = Math.random() < 0.55;
+  let a, b, op, ans;
+  if (useAdd) {
+    a = randInt(min, max); b = randInt(min, max - a + min);
+    ans = a + b; op = '＋';
+  } else {
+    a = randInt(min + 1, max); b = randInt(min, a - 1);
+    ans = a - b; op = '－';
+  }
+  correctAns = ans;
+  $('question').textContent = `${a} ${op} ${b} ＝ ?`;
+  const choices = makeChoices(ans, max * 2);
+  const grid = $('answers');
+  grid.innerHTML = '';
+  choices.forEach(c => {
+    const btn = document.createElement('button');
+    btn.textContent = c;
+    btn.onclick = () => handleAnswer(btn, c);
+    grid.appendChild(btn);
+  });
+  save.stats.total++;
+  // 弱点集計キー
+  const key = op === '＋' ? 'add' : 'sub';
+  save.stats.weakOps[key] = (save.stats.weakOps[key] || 0);
+}
+
+function handleAnswer(btn, val) {
+  if (!battleActive) return;
+  const btns = $('answers').querySelectorAll('button');
+  btns.forEach(b => b.disabled = true);
+
+  if (val === correctAns) {
+    // 正解
+    save.stats.correct++;
+    btn.classList.add('ok');
+    attackEnemy();
+  } else {
+    // 不正解
+    btn.classList.add('ng');
+    const key = $('question').textContent.includes('＋') ? 'add' : 'sub';
+    save.stats.weakOps[key] = (save.stats.weakOps[key] || 0) + 1;
+    takeDamage();
+  }
+  writeSave();
+}
+
+function attackEnemy() {
+  // ヒーローが前進
+  const hero = $('heroImg');
+  hero.classList.add('hero-attack');
+  const fx = $('effect');
+  fx.textContent = '💥';
+  setTimeout(() => {
+    fx.classList.add('show');
+    $('enemyImg').classList.add('enemy-hit');
+  }, 200);
+  setTimeout(() => {
+    hero.classList.remove('hero-attack');
+    $('enemyImg').classList.remove('enemy-hit');
+    fx.classList.remove('show');
+    enemyHpNow--;
+    updateEnemyHp();
+    if (enemyHpNow <= 0) {
+      enemyDefeated();
+    } else {
+      nextQuestion();
+    }
+  }, 600);
+}
+
+function enemyDefeated() {
+  // 報酬
+  save.coins += currentEnemy.coin;
+  gainXp(currentEnemy.xp);
+  updateTopBar();
+
+  currentEnemyIdx++;
+  const stage = STAGES[currentStageIdx];
+  // 全敵を倒したらクリア (3体分)
+  if (currentEnemyIdx >= 3) {
+    stageClear();
+    return;
+  }
+  // 次の敵
+  setTimeout(() => spawnEnemy(), 600);
+}
+
+function takeDamage() {
+  playerHp--;
+  renderHearts();
+  $('heroImg').style.filter = 'drop-shadow(0 0 12px red)';
+  setTimeout(() => { $('heroImg').style.filter = ''; }, 500);
+  if (playerHp <= 0) {
+    gameOver();
+  } else {
+    setTimeout(() => nextQuestion(), 700);
+  }
+}
+
+function stageClear() {
+  battleActive = false;
+  // 次のステージ解放
+  const next = STAGES[currentStageIdx + 1];
+  if (next && !save.unlockedStages.includes(next.id)) {
+    save.unlockedStages.push(next.id);
+  }
+  writeSave();
+  $('clearText').textContent = `${STAGES[currentStageIdx].name} をクリア！ 🎉\n+${currentEnemy.coin * 3}コイン もらった！`;
+  showScreen('clear');
+}
+
+function gameOver() {
+  battleActive = false;
+  writeSave();
+  $('clearText').textContent = 'たいへん！ HPがなくなった…\nもういちどがんばろう！';
+  $('clearText').style.color = '#e23b3b';
+  showScreen('clear');
+}
+
+/* ========== XP & LEVEL ========== */
+function gainXp(amount) {
+  save.exp += amount;
+  while (save.exp >= save.lv * EXP_PER_LV) {
+    save.exp -= save.lv * EXP_PER_LV;
+    save.lv++;
+    showLvUp();
+  }
+  updateExpBar();
+}
+
+function updateExpBar() {
+  const needed = save.lv * EXP_PER_LV;
+  const pct = Math.min(100, save.exp / needed * 100);
+  $('expBar').style.width = pct + '%';
+  $('expText').textContent = `Lv.${save.lv}  EXP ${save.exp}/${needed}`;
+}
+
+function showLvUp() {
+  const fx = $('effect');
+  fx.textContent = '⬆️';
+  fx.classList.add('show');
+  setTimeout(() => fx.classList.remove('show'), 600);
+}
+
+/* ========== GACHA ========== */
+$('spinBtn').addEventListener('click', () => {
+  if (save.coins < GACHA_COST) {
+    $('gachaMsg').textContent = 'コインがたりない！バトルでかせごう 🪙';
+    return;
+  }
+  save.coins -= GACHA_COST;
+  updateTopBar();
+
+  // 重み抽選
+  const weights = { C: 50, B: 30, A: 15, S: 5 };
+  const pool = GACHA_POOL.map(g => ({ ...g, w: weights[g.rarity] }));
+  const total = pool.reduce((s, g) => s + g.w, 0);
+  let r = Math.random() * total;
+  let prize = pool[0];
+  for (const g of pool) { r -= g.w; if (r <= 0) { prize = g; break; } }
+
+  // 図鑑追加
+  if (!save.collection.find(c => c.name === prize.name)) {
+    save.collection.push({ name: prize.name, img: prize.img, rarity: prize.rarity });
+  }
+  writeSave();
+
+  // アニメ
+  const box = $('gachaPrize');
+  box.innerHTML = '✨';
+  box.style.fontSize = '80px';
+  setTimeout(() => {
+    box.innerHTML = `<img src="${prize.img}" style="width:110px"><div style="font-size:20px;font-weight:900">${prize.name}<br><span style="color:${rarityColor(prize.rarity)}">[${prize.rarity}]</span></div>`;
+    $('gachaMsg').textContent = `${prize.name} をゲット！`;
+  }, 700);
+});
+
+function rarityColor(r) {
+  return { C: '#888', B: '#2589e8', A: '#e8a325', S: '#e825a3' }[r] || '#888';
+}
+
+/* ========== BOOK ========== */
+function buildBook() {
+  const grid = $('bookGrid');
+  grid.innerHTML = '';
+  $('bookCount').textContent = `${save.collection.length}/${GACHA_POOL.length}`;
+  GACHA_POOL.forEach(g => {
+    const found = save.collection.find(c => c.name === g.name);
+    const card = document.createElement('div');
+    card.className = 'book-card' + (found ? '' : ' locked');
+    card.innerHTML = `<img src="${found ? g.img : 'assets/app-icon.svg'}"><div>${found ? g.name : '？？？'}</div>${found ? `<div style="color:${rarityColor(g.rarity)};font-weight:900">[${g.rarity}]</div>` : ''}`;
+    grid.appendChild(card);
+  });
+}
+
+/* ========== PARENT ========== */
+function buildParent() {
+  const total = save.stats.total;
+  const correct = save.stats.correct;
+  $('rate').textContent = total > 0 ? Math.round(correct / total * 100) + '%' : '0%';
+  $('totalQ').textContent = total + '問';
+  const weakOps = save.stats.weakOps;
+  const weakList = Object.entries(weakOps).sort((a, b) => b[1] - a[1]);
+  if (weakList.length) {
+    const top = weakList[0];
+    $('weak').textContent = top[0] === 'add' ? 'たしざん' : 'ひきざん';
+  } else {
+    $('weak').textContent = 'まだありません';
+  }
+}
+
+$('resetBtn').addEventListener('click', () => {
+  if (confirm('データをリセットしますか？')) {
+    localStorage.removeItem('keisan_save');
+    save = defaultSave();
+    updateTopBar();
+    showScreen('title');
+  }
+});
+
+/* ========== UTIL ========== */
+function randInt(min, max) {
+  return Math.floor(Math.random() * (max - min + 1)) + min;
+}
+function makeChoices(correct, maxVal) {
+  const set = new Set([correct]);
+  let tries = 0;
+  while (set.size < 4 && tries < 80) {
+    tries++;
+    const w = correct + (Math.random() < 0.5 ? 1 : -1) * randInt(1, 5);
+    if (w >= 0 && w <= maxVal) set.add(w);
+  }
+  while (set.size < 4) set.add(correct + set.size);
+  return [...set].sort(() => Math.random() - 0.5);
+}
+
+/* ========== INIT ========== */
+updateTopBar();
+updateExpBar();
+
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', () => navigator.serviceWorker.register('./sw.js'));
+}
